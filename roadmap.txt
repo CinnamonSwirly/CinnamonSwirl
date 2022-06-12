@@ -1,0 +1,6 @@
+Check out configparser instead of using dotenv
+    If we do use this, we need to initialize the config file for first-time use if it's not found.
+    We'd also want to verify each value of the config is valid. Throw errors or overwrite invalid values.
+
+Configure logging
+    Do we need to sanitize strings for potential weirdness? 
