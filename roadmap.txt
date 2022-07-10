@@ -1,6 +1,26 @@
+Phase 0 - WE ARE HERE
+    Planning initial features
+    Making design decisions
+    Implementing practices learned in courses
+Phase 1
+    Basic functionality
+    Documentation Tools and/or generation methods
+Phase 2
+    Database implementation
+    Methods to stand up environment on demand (Dockerfile, docker compose, etc)
+Phase 3
+    Adding advanced features
+Phase 4
+    Cleanup for public release
+Phase 5
+    Release
+    Ongoing maintenance
+
+Phase 1 Notes:
 Check out configparser instead of using dotenv
     If we do use this, we need to initialize the config file for first-time use if it's not found.
     We'd also want to verify each value of the config is valid. Throw errors or overwrite invalid values.
+        To be fair you'd have to do this anyway on an env file
 
 Configure logging
     Do we need to sanitize strings for potential weirdness? 
