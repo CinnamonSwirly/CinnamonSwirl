@@ -18,9 +18,14 @@ Phase 5
 
 Phase 1 Notes:
 Check out configparser instead of using dotenv
-    If we do use this, we need to initialize the config file for first-time use if it's not found.
-    We'd also want to verify each value of the config is valid. Throw errors or overwrite invalid values.
-        To be fair you'd have to do this anyway on an env file
+    Yay! It worked! There is a 'fallback' method built-in to configparser, however, I wanted a cute dictionary
+    to visualize the default config instead of having it line-by-line.
 
 Configure logging
-    Do we need to sanitize strings for potential weirdness? 
+    I ended up hard-coding the location of the log file and the name of it. I originally played around with letting
+    these be changed in the config file, but I found it just wasn't worth it. Given that I was only doing this to learn
+    using the current libraries and the config will likely be placed in a DB anyway, it didn't make sense to
+    over-engineer it.
+
+Testing
+    Never done it before - automated, I mean. - so I need to find examples and try them out.

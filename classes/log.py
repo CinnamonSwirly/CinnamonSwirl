@@ -1,6 +1,5 @@
-import logging
 import warnings
-from os import path, makedirs
+from os import path, makedirs, getcwd
 from classes import Configuration
 
 __all__ = "Log",
@@ -8,30 +7,49 @@ __all__ = "Log",
 
 class Log:
     def __init__(self, configuration_file: Configuration):
-        # In case the slashes here are confusing, it merges the two so we get path\to\directory\log.file
-        logging_file_path = f"{configuration_file['LOGGING']['logFileDirectory']}\\" \
-                              f"{configuration_file['LOGGING']['logFileName']}"
-        # TODO: There's a chance someone puts ..\..\path\to\somewhere\they\shouldn't\be
+        """
+        Validates configuration settings around logging, ensures the "logs" directory exists, creates it if it doesn't
+        :param configuration_file:
+        :return filepath for log file. Intended for use with Logging.basicConfig.
+        """
+        try:
+            assert 'LOGGING' in configuration_file.configuration
+        except AssertionError:
+            warnings.warn(f"No LOGGING section in {configuration_file.filename} file. "
+                          f"Generating a default one instead.",
+                          Warning)
+            configuration_file.fallback(category='LOGGING')
 
-        if not path.exists(logging_file_path):
+        for key in ['loggingLevel']:
             try:
-                directories_to_create = configuration_file['LOGGING']['logFileDirectory']
-                makedirs(f"{directories_to_create}")
-            except FileExistsError:
-                pass
-            except OSError:
-                warnings.warn("Invalid logging file path specified in config file. Reverting to default instead.",
+                assert key in configuration_file.configuration['LOGGING']
+            except AssertionError:
+                warnings.warn(f"No {key} line found in {configuration_file.filename} file. "
+                              f"Going with the default instead.",
                               Warning)
-                # TODO: Tell configuration_file to use default config
+                configuration_file.fallback(category='LOGGING', item=key)
 
-            try:
-                create_logging_file = open(f"{logging_file_path}", "x")
-            except OSError:
-                warnings.warn(f"The OS reports {logging_file_path} doesn't exist, but when we tried to create the file,"
-                              f" we were given an error. We will use a default config instead.")
-                # TODO: Tell configuration_file to use default config
+        try:
+            assert configuration_file.configuration['LOGGING']['loggingLevel'] in \
+                   ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+        except AssertionError:
+            warnings.warn("Invalid logging level specified in config file. Reverting to WARNING instead.", Warning)
+            configuration_file.fallback(category='LOGGING', item='loggingLevel')
 
+        current_path = getcwd()
+        logging_file_path = current_path + "\\logs\\cinnamonswirl.log"
+
+        try:
             assert path.exists(logging_file_path)
+        except AssertionError:
+            try:
+                directories_to_create, tail = logging_file_path.split("\\cinnamonswirl.log")
+                makedirs(f"{directories_to_create}")
+                open(f"{logging_file_path}", "x")
+            except OSError:
+                warnings.warn(f"Unable to create {logging_file_path}, verify you have permissions and/or disk space.",
+                              Warning)
+                raise
 
         self.path = logging_file_path
 
