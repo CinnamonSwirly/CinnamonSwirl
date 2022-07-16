@@ -47,6 +47,9 @@ class Configuration:
         default_config = {
             "LOGGING": {
                 "loggingLevel": "DEBUG"
+            },
+            "DATABASE": {
+                "connectionString": ""
             }
         }
         if category is None and item is not None:
