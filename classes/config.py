@@ -32,7 +32,13 @@ class Configuration:
         :param item: Automatically passed when you ask for items from this instance's dictionary.
         :return: Configuration item requested
         """
+        # FIXME: This only works when calling "If thing in configuration["item"]" but I also want it to work
+        #   when calling "If thing in configuration". The workaround is "If thing in configuration.configuration"
+
         return self.configuration[item]
+
+    def __get__(self, instance, owner):
+        return self.configuration
 
     def fallback(self, category: str = None, item: str = None):
         """
@@ -49,7 +55,14 @@ class Configuration:
                 "loggingLevel": "DEBUG"
             },
             "DATABASE": {
-                "connectionString": ""
+                "connectionString": "mongodb://localhost:27017/",
+                "databaseName": "CinnamonSwirl",
+                "username": "",
+                "password": ""
+            },
+            "DISCORD": {
+                "clientID": "",
+                "token": ""
             }
         }
         if category is None and item is not None:
