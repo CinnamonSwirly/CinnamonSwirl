@@ -3,7 +3,7 @@ import motor.motor_asyncio
 import warnings
 import logging
 from classes import Configuration
-from typing import Union
+from typing import Union, Any
 
 __all__ = "MongoDB",
 
@@ -70,3 +70,20 @@ class MongoDB:
             assert database.validate_collection(collection)
             document = await collection.find_one(query)
             return document
+
+    async def insert_one(self, database: Union[str, motor.motor_asyncio.AsyncIOMotorDatabase],
+                         collection: Union[str, pymongo.collection.Collection],
+                         query: dict) -> Union[int, None]:
+        logging.info(f"classes.database.MongoDB: insert_one called for db: {database}, "
+                     f"collection: {collection}, query: {query}")
+        async with await self.client.start_session():
+            if type(database) is str:
+                database = self.client.get_database(database)
+            if type(collection) is str:
+                collection = database.get_collection(collection)
+            assert database.validate_collection(collection)
+            result = await collection.insert_one(query)
+            if result.inserted_id:
+                return result.inserted_id
+            else:
+                return None

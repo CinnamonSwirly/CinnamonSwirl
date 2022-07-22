@@ -68,17 +68,18 @@ class Bot:
         async def on_command_error(context, exception):
             exception_type = type(exception)
             responses = {
-                discord.ext.commands.errors.NotOwner: f"You're not my owner! Their ID is {self.ownerID} "
-                                                      f"and your ID is {context.message.author.id}."
+                discord.ext.commands.errors.NotOwner: "You're not the boss of me!",
+                discord.ext.commands.errors.MissingRequiredArgument: "You're missing something. Try typing $help.",
+                discord.ext.commands.errors.CommandInvokeError: f"I didn't understand that. Try typing $help."
             }  # TODO: There's plenty more exceptions to handle here.
 
             if exception_type in responses:
-                logging.warning("bot.py: Handled exception: ", exception_type, context.invoked_with,
-                                "by: ", context.message.author.id)
+                logging.warning(f"bot.py: Handled exception: {exception_type}, {context.invoked_with}, "
+                                f"by: {context.message.author.id}")
                 await context.send(responses[exception_type])
             else:
-                logging.error("bot.py: Unhandled exception: ", exception_type, context.invoked_with,
-                              "by: ", context.message.author.id)
+                logging.error(f"bot.py: Unhandled exception: {exception_type}, {context.invoked_with}, "
+                              f"by: {context.message.author.id}")
                 raise
 
         @self.bot.event
@@ -99,6 +100,41 @@ class Bot:
         async def stop(context):
             await context.send("Signing off, bye bye!")
             await self.bot.close()  # NOTE: This would normally raise RuntimeError. See Bot.silence_event_loop_closed
+
+        @self.bot.command(name="remind", aliases=("remindme", "reminder"),
+                          brief="Will DM you a message you give it at the time you set",
+                          usage="remind (whole number) (years/months/days/hours/minutes) (message)"
+                                "\nExample: $remindme 1 day Do Project")
+        async def remind(context, amount, units, *args):
+            if type(amount) is not int:
+                try:
+                    amount = int(amount)
+                except ValueError:
+                    raise discord.ext.commands.errors.CommandInvokeError
+            if type(units) is not str:
+                try:
+                    units = str(units)
+                except ValueError:
+                    raise discord.ext.commands.errors.CommandInvokeError
+            if type(args) is tuple:
+                args = "{}".format(" ").join(args)
+
+            if 0 < amount < 1000000:
+                pass  # OK
+            else:
+                await context.send(f"You can't specify more than 999,999 {units}.")
+                return
+
+            if units in ('year', 'years', 'month', 'months', 'day', 'days', 'hour', 'hours', 'minute', 'minutes'):
+                pass  # OK
+            else:
+                await context.send(f"{units} needs to be year(s), month(s), day(s), hour(s) or minute(s).")
+                return
+
+            if context and amount and units and args:
+                await context.send(f"I would make a reminder in {amount} {units} saying {args}")
+            else:
+                await context.send("I didn't fully understand that, check $help remind")
 
     def run(self):
         self.bot.run(self.token)
