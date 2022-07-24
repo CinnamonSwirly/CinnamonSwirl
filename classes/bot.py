@@ -1,12 +1,34 @@
 import discord
 import logging
+import pymongo.errors
+from datetime import datetime, timedelta
 from asyncio import proactor_events
 from urllib import parse
 from discord.ext import commands
-from classes import Configuration, MongoDB
 from functools import wraps
+from .config import Configuration
+from .database import MongoDB
+from .reminder import Reminder
 
 __all__ = "Bot",
+
+
+def _sanitize(content: str) -> str:
+    if 'unction()' in content:
+        raise AttemptedInjectionException
+    if '$' in content or '()' in content or ';' in content:
+        raise UnsupportedCharactersException
+    return content
+
+
+class AttemptedInjectionException(Exception):
+    def __init__(self):
+        super().__init__()
+
+
+class UnsupportedCharactersException(Exception):
+    def __init__(self):
+        super().__init__()
 
 
 class Bot:
@@ -40,10 +62,10 @@ class Bot:
         """
         # noinspection PyProtectedMember
         proactor_events._ProactorBasePipeTransport.__del__ = \
-            self.silence_event_loop_closed(proactor_events._ProactorBasePipeTransport.__del__)
+            self._silence_event_loop_closed(proactor_events._ProactorBasePipeTransport.__del__)
 
     @staticmethod
-    def silence_event_loop_closed(func):
+    def _silence_event_loop_closed(func):
         """
         # What is this? On bot._commands.stop, discord.py stops the running loop in asyncio cleanly, but
         # asyncio does not close everything up after that cleanly. A dangling 'RuntimeError' would be raised
@@ -70,8 +92,21 @@ class Bot:
             responses = {
                 discord.ext.commands.errors.NotOwner: "You're not the boss of me!",
                 discord.ext.commands.errors.MissingRequiredArgument: "You're missing something. Try typing $help.",
-                discord.ext.commands.errors.CommandInvokeError: f"I didn't understand that. Try typing $help."
-            }  # TODO: There's plenty more exceptions to handle here.
+                discord.ext.commands.errors.CommandInvokeError: "I didn't understand that. "
+                                                                "You may have a bad character in your input. "
+                                                                "Try typing $help.",
+                pymongo.errors.WriteError: "There was a problem writing that to my internal database.",
+                AttemptedInjectionException: "You stop that. You know what you did.",
+                UnsupportedCharactersException: "Sorry, I can't support $, () or ;. Try again without those."
+            }
+
+            serious_errors = [
+                pymongo.errors.WriteError,
+                AttemptedInjectionException
+            ]
+
+            if exception_type in serious_errors:
+                await alert_owner(context, exception)
 
             if exception_type in responses:
                 logging.warning(f"bot.py: Handled exception: {exception_type}, {context.invoked_with}, "
@@ -81,6 +116,11 @@ class Bot:
                 logging.error(f"bot.py: Unhandled exception: {exception_type}, {context.invoked_with}, "
                               f"by: {context.message.author.id}")
                 raise
+
+        async def alert_owner(context, exception: Exception):
+            await self.owner.send(f"Hi, I ran into an issue. Encountered {str(exception)} during\n"
+                                  f"{context.message} on {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}\n"
+                                  f"Please investigate.")
 
         @self.bot.event
         async def on_ready():
@@ -99,25 +139,30 @@ class Bot:
         @commands.is_owner()
         async def stop(context):
             await context.send("Signing off, bye bye!")
-            await self.bot.close()  # NOTE: This would normally raise RuntimeError. See Bot.silence_event_loop_closed
+            await self.bot.close()  # NOTE: This would normally raise RuntimeError. See Bot._silence_event_loop_closed
 
         @self.bot.command(name="remind", aliases=("remindme", "reminder"),
                           brief="Will DM you a message you give it at the time you set",
                           usage="remind (whole number) (years/months/days/hours/minutes) (message)"
                                 "\nExample: $remindme 1 day Do Project")
         async def remind(context, amount, units, *args):
+            # FIXME: All of the custom errors from pymongo or internally raise as CommandInvokeError, which is nasty.
             if type(amount) is not int:
                 try:
                     amount = int(amount)
                 except ValueError:
                     raise discord.ext.commands.errors.CommandInvokeError
+
             if type(units) is not str:
                 try:
                     units = str(units)
                 except ValueError:
                     raise discord.ext.commands.errors.CommandInvokeError
+
             if type(args) is tuple:
                 args = "{}".format(" ").join(args)
+
+            args = _sanitize(args)
 
             if 0 < amount < 1000000:
                 pass  # OK
@@ -126,15 +171,27 @@ class Bot:
                 return
 
             if units in ('year', 'years', 'month', 'months', 'day', 'days', 'hour', 'hours', 'minute', 'minutes'):
-                pass  # OK
+                if units[len(units) - 1] != 's':
+                    units += 's'
             else:
                 await context.send(f"{units} needs to be year(s), month(s), day(s), hour(s) or minute(s).")
                 return
 
             if context and amount and units and args:
-                await context.send(f"I would make a reminder in {amount} {units} saying {args}")
+                timedelta_keyword = {units: amount}
+                reminder_time = datetime.now() + timedelta(**timedelta_keyword)
+                reminder = Reminder(time=reminder_time, message=args, recipient=context.message.author.id)
+                reminder_id = await reminder.write(database_connection=self.database_connection)
+
+                if reminder_id:
+                    reminder_time_friendly = reminder_time.strftime('%d %b %Y, %H:%M')
+                    response = f"Successfully created a reminder on {reminder_time_friendly}! I'll DM you then!"
+                else:
+                    response = f"Your reminder was not saved. I'll report this to my owner."
             else:
-                await context.send("I didn't fully understand that, check $help remind")
+                response = "I didn't fully understand that, check $help remind"
+
+            await context.send(response)
 
     def run(self):
         self.bot.run(self.token)

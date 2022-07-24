@@ -1,9 +1,7 @@
-from .config import *
-from .log import *
-from .database import *
-from .bot import *
+from .config import Configuration
+from .log import Log
+from .database import MongoDB
+from .bot import Bot
+from .reminder import Reminder
 
-__all__ = (config.__all__ +
-           log.__all__ +
-           database.__all__ +
-           bot.__all__)
+__all__ = (Configuration, Log, MongoDB, Bot, Reminder)
