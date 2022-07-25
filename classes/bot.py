@@ -1,6 +1,7 @@
 import discord
 import logging
 import pymongo.errors
+import re
 from datetime import datetime, timedelta
 from asyncio import proactor_events
 from urllib import parse
@@ -13,20 +14,21 @@ from .reminder import Reminder
 __all__ = "Bot",
 
 
-def _sanitize(content: str) -> str:
-    if 'unction()' in content:
+def _sanitize(context: discord.ext.commands.Context) -> bool:
+    content = context.message.content
+    if re.search('[F,f]unction\\(\\)', content):
         raise AttemptedInjectionException
-    if '$' in content or '()' in content or ';' in content:
+    if re.search('[$;]|\\(\\)', content):
         raise UnsupportedCharactersException
-    return content
+    return True
 
 
-class AttemptedInjectionException(Exception):
+class AttemptedInjectionException(discord.ext.commands.CommandError):
     def __init__(self):
         super().__init__()
 
 
-class UnsupportedCharactersException(Exception):
+class UnsupportedCharactersException(discord.ext.commands.CommandError):
     def __init__(self):
         super().__init__()
 
@@ -46,7 +48,7 @@ class Bot:
         self.ownerID = int(parse.quote_plus(self.configuration["DISCORD"]["ownerID"]))
         self.owner = None
 
-        self.bot = commands.Bot(command_prefix="$", intents=intents, owner_id=self.ownerID)
+        self.bot = commands.Bot(command_prefix="@@", intents=intents, owner_id=self.ownerID)
 
         self._events()
         self._commands()
@@ -92,9 +94,7 @@ class Bot:
             responses = {
                 discord.ext.commands.errors.NotOwner: "You're not the boss of me!",
                 discord.ext.commands.errors.MissingRequiredArgument: "You're missing something. Try typing $help.",
-                discord.ext.commands.errors.CommandInvokeError: "I didn't understand that. "
-                                                                "You may have a bad character in your input. "
-                                                                "Try typing $help.",
+                discord.ext.commands.errors.CommandInvokeError: "Something went wrong. Sorry.",
                 pymongo.errors.WriteError: "There was a problem writing that to my internal database.",
                 AttemptedInjectionException: "You stop that. You know what you did.",
                 UnsupportedCharactersException: "Sorry, I can't support $, () or ;. Try again without those."
@@ -117,11 +117,6 @@ class Bot:
                               f"by: {context.message.author.id}")
                 raise
 
-        async def alert_owner(context, exception: Exception):
-            await self.owner.send(f"Hi, I ran into an issue. Encountered {str(exception)} during\n"
-                                  f"{context.message} on {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}\n"
-                                  f"Please investigate.")
-
         @self.bot.event
         async def on_ready():
             params = {
@@ -134,6 +129,11 @@ class Bot:
             self.owner = await self.bot.fetch_user(user_id=self.ownerID)
             await self.owner.send("[In Starcraft SCV voice]: Reporting for duty!")
 
+        async def alert_owner(context, exception: Exception):
+            await self.owner.send(f"Hi, I ran into an issue. Encountered {type(exception)} during\n"
+                                  f"{context.message.content}\non {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}\n"
+                                  f"Please investigate.")
+
     def _commands(self):
         @self.bot.command(name="stop")
         @commands.is_owner()
@@ -141,6 +141,7 @@ class Bot:
             await context.send("Signing off, bye bye!")
             await self.bot.close()  # NOTE: This would normally raise RuntimeError. See Bot._silence_event_loop_closed
 
+        @commands.check(_sanitize)
         @self.bot.command(name="remind", aliases=("remindme", "reminder"),
                           brief="Will DM you a message you give it at the time you set",
                           usage="remind (whole number) (years/months/days/hours/minutes) (message)"
@@ -161,8 +162,6 @@ class Bot:
 
             if type(args) is tuple:
                 args = "{}".format(" ").join(args)
-
-            args = _sanitize(args)
 
             if 0 < amount < 1000000:
                 pass  # OK
