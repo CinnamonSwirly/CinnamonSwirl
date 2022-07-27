@@ -3,7 +3,7 @@ import motor.motor_asyncio
 import warnings
 import logging
 from classes import Configuration
-from typing import Union, Any
+from typing import Union, Optional, Literal
 
 __all__ = "MongoDB",
 
@@ -68,8 +68,32 @@ class MongoDB:
             if type(collection) is str:
                 collection = database.get_collection(collection)
             assert database.validate_collection(collection)
-            document = await collection.find_one(query)
+            document = await collection.find_one(filter=query)
             return document
+
+    async def find_many(self, database: Union[str, motor.motor_asyncio.AsyncIOMotorDatabase],
+                        collection: Union[str, pymongo.collection.Collection],
+                        query: dict, length: int, sort_by: Optional[str],
+                        sort_direction: Optional[Literal[1, -1]]) -> list:
+        logging.info(f"classes.database.MongoDB: find_many called for db: {database}, "
+                     f"collection: {collection}, query: {query}")
+        async with await self.client.start_session():
+            if type(database) is str:
+                database = self.client.get_database(database)
+            if type(collection) is str:
+                collection = database.get_collection(collection)
+            assert database.validate_collection(collection)
+            cursor = collection.find(filter=query)
+            if sort_by and sort_direction:
+                logging.debug(f"classes.database.MongoDB: find_many has sorting enabled. "
+                              f"{sort_by} by {sort_direction}")
+                assert sort_by in ('_id', 'recipient', 'message', 'time')
+                cursor.sort(key_or_list=sort_by, direction=sort_direction)
+            # Pycharm thinks collection and cursor could be a str. We catch that above and change it.
+            # noinspection PyUnresolvedReferences
+            result = await cursor.to_list(length=length)
+            logging.debug(f"classes.database.MongoDB: Found {len(result)} result(s).")
+            return result
 
     async def insert_one(self, database: Union[str, motor.motor_asyncio.AsyncIOMotorDatabase],
                          collection: Union[str, pymongo.collection.Collection],

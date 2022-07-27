@@ -90,11 +90,12 @@ class Bot:
     def _events(self):
         @self.bot.event
         async def on_command_error(context, exception):
+            logging.debug(f"classes.bot.py: on_command_error called for {type(exception)}")
             exception_type = type(exception)
             responses = {
                 discord.ext.commands.errors.NotOwner: "You're not the boss of me!",
                 discord.ext.commands.errors.MissingRequiredArgument: "You're missing something. Try typing $help.",
-                discord.ext.commands.errors.CommandInvokeError: "Something went wrong. Sorry.",
+                # discord.ext.commands.errors.CommandInvokeError: "Something went wrong. Sorry.",
                 pymongo.errors.WriteError: "There was a problem writing that to my internal database.",
                 AttemptedInjectionException: "You stop that. You know what you did.",
                 UnsupportedCharactersException: "Sorry, I can't support $, () or ;. Try again without those."
@@ -130,6 +131,7 @@ class Bot:
             await self.owner.send("[In Starcraft SCV voice]: Reporting for duty!")
 
         async def alert_owner(context, exception: Exception):
+            logging.debug(f"classes.bot.py: alert_owner triggered for {type(exception)}")
             await self.owner.send(f"Hi, I ran into an issue. Encountered {type(exception)} during\n"
                                   f"{context.message.content}\non {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}\n"
                                   f"Please investigate.")
@@ -146,18 +148,20 @@ class Bot:
                           brief="Will DM you a message you give it at the time you set",
                           usage="remind (whole number) (years/months/days/hours/minutes) (message)"
                                 "\nExample: $remindme 1 day Do Project")
-        async def remind(context, amount, units, *args):
-            # FIXME: All of the custom errors from pymongo or internally raise as CommandInvokeError, which is nasty.
+        async def _remind(context, amount, units, *args):
+            logging.info(f"classes.bot.py: remind called with {context.message.content}: {amount} {units} {args}")
             if type(amount) is not int:
                 try:
                     amount = int(amount)
                 except ValueError:
+                    logging.debug("classes.bot.py: remind rejected the amount parameter. It was not an int")
                     raise discord.ext.commands.errors.CommandInvokeError
 
             if type(units) is not str:
                 try:
                     units = str(units)
                 except ValueError:
+                    logging.debug("classes.bot.py: remind rejected the units parameter. It was not a str")
                     raise discord.ext.commands.errors.CommandInvokeError
 
             if type(args) is tuple:
@@ -166,6 +170,7 @@ class Bot:
             if 0 < amount < 1000000:
                 pass  # OK
             else:
+                logging.debug("classes.bot.py: remind rejected the amount parameter. It was too high or too low")
                 await context.send(f"You can't specify more than 999,999 {units}.")
                 return
 
@@ -173,22 +178,51 @@ class Bot:
                 if units[len(units) - 1] != 's':
                     units += 's'
             else:
+                logging.debug("classes.bot.py: remind rejected the units parameter. It was not an expected value.")
                 await context.send(f"{units} needs to be year(s), month(s), day(s), hour(s) or minute(s).")
                 return
 
             if context and amount and units and args:
                 timedelta_keyword = {units: amount}
-                reminder_time = datetime.now() + timedelta(**timedelta_keyword)
+                reminder_time = datetime.utcnow() + timedelta(**timedelta_keyword)
                 reminder = Reminder(time=reminder_time, message=args, recipient=context.message.author.id)
                 reminder_id = await reminder.write(database_connection=self.database_connection)
 
                 if reminder_id:
+                    logging.info("classes.bot.py: remind accepted and committed a new reminder to the DB")
                     reminder_time_friendly = reminder_time.strftime('%d %b %Y, %H:%M')
                     response = f"Successfully created a reminder on {reminder_time_friendly}! I'll DM you then!"
                 else:
+                    logging.error("classes.bot.py: remind accepted but was unable to commit a new reminder to the DB")
                     response = f"Your reminder was not saved. I'll report this to my owner."
             else:
+                logging.warning("classes.bot.py: remind rejected the reminder for an unhandled reason.")
                 response = "I didn't fully understand that, check $help remind"
+
+            await context.send(response)
+
+        @self.bot.command(name="list", aliases=("get", "find"), help="List your upcoming reminders.")
+        async def _list(context):
+            logging.info(f"classes.bot.py: list called with {context.message.content}")
+            author = context.message.author
+            query = {
+                "recipient": author.id,
+                "time": {"$gt": datetime.utcnow()}
+            }
+            reminders = await self.database_connection.find_many(database="CinnamonSwirl", collection="Reminders",
+                                                                 query=query, length=5, sort_by="time",
+                                                                 sort_direction=pymongo.ASCENDING)
+            if reminders:
+                response = "These are your 5 next upcoming reminders:\n"
+                counter = 0
+                for reminder in reminders:
+                    counter += 1
+                    # FIXME: This displays in UTC time! Somehow it needs to show in the user's timezone...
+                    response += f"{counter}. {reminder['time'].strftime('%d %b %Y, %H:%M')}:" \
+                                f"\n    `{reminder['message']}`\n"
+                response += ""
+            else:
+                response = "You either don't have any upcoming reminders or I failed to find them."
 
             await context.send(response)
 
