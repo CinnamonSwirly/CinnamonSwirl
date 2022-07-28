@@ -29,3 +29,11 @@ Configure logging
 
 Testing
     Never done it before - automated, I mean. - so I need to find examples and try them out.
+
+Future features:
+* Timezone support
+    Probably to be done via website
+* Remove and edit reminders
+    Good idea for over the website! Will still implement a "Clear all" function.
+* Snooze function
+    Make the bot shut up for a while, ignoring reminders.

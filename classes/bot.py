@@ -95,7 +95,7 @@ class Bot:
             responses = {
                 discord.ext.commands.errors.NotOwner: "You're not the boss of me!",
                 discord.ext.commands.errors.MissingRequiredArgument: "You're missing something. Try typing $help.",
-                # discord.ext.commands.errors.CommandInvokeError: "Something went wrong. Sorry.",
+                discord.ext.commands.errors.CommandInvokeError: "Something went wrong. Sorry.",
                 pymongo.errors.WriteError: "There was a problem writing that to my internal database.",
                 AttemptedInjectionException: "You stop that. You know what you did.",
                 UnsupportedCharactersException: "Sorry, I can't support $, () or ;. Try again without those."
@@ -209,17 +209,22 @@ class Bot:
                 "recipient": author.id,
                 "time": {"$gt": datetime.utcnow()}
             }
-            reminders = await self.database_connection.find_many(database="CinnamonSwirl", collection="Reminders",
-                                                                 query=query, length=5, sort_by="time",
-                                                                 sort_direction=pymongo.ASCENDING)
-            if reminders:
+            reminders_raw = await self.database_connection.find_many(database="CinnamonSwirl", collection="Reminders",
+                                                                     query=query, length=5, sort_by="time",
+                                                                     sort_direction=pymongo.ASCENDING)
+
+            if reminders_raw:
+                reminders = []
+                for item in reminders_raw:
+                    reminders.append(Reminder(time=item['time'], message=item['message'],
+                                              recipient=item['recipient']))
+
                 response = "These are your 5 next upcoming reminders:\n"
                 counter = 0
                 for reminder in reminders:
                     counter += 1
-                    # FIXME: This displays in UTC time! Somehow it needs to show in the user's timezone...
-                    response += f"{counter}. {reminder['time'].strftime('%d %b %Y, %H:%M')}:" \
-                                f"\n    `{reminder['message']}`\n"
+                    response += f"{counter}. In {reminder.time_remaining()}:" \
+                                f"\n    `{reminder.message}`\n"
                 response += ""
             else:
                 response = "You either don't have any upcoming reminders or I failed to find them."
