@@ -3,13 +3,14 @@ import logging
 import pymongo.errors
 import re
 from datetime import datetime, timedelta
-from asyncio import proactor_events
+from asyncio import proactor_events, sleep
 from urllib import parse
-from discord.ext import commands
+from discord.ext import commands, tasks
 from functools import wraps
 from .config import Configuration
 from .database import MongoDB
 from .reminder import Reminder
+from typing import Optional
 
 __all__ = "Bot",
 
@@ -33,11 +34,17 @@ class UnsupportedCharactersException(discord.ext.commands.CommandError):
         super().__init__()
 
 
+class InternalBufferNotReady(discord.ext.commands.CommandError):
+    def __init__(self):
+        super().__init__()
+
+
 class Bot:
     def __init__(self, configuration: Configuration, database_connection: MongoDB,
                  intents: discord.Intents):
         self.configuration = configuration
         self.database_connection = database_connection
+        self.buffer = RemindersBuffer(database_connection=database_connection)
 
         assert "DISCORD" in self.configuration.configuration
         for key in ("clientID", "token", "ownerID"):
@@ -127,13 +134,19 @@ class Bot:
             print(f"Bot started and connected to Discord! Invite link: {discord.utils.oauth_url(**params)}")
             logging.info("Bot.py: Bot successfully connected to Discord.")
 
+            self.refresh_buffer.start()
+
             self.owner = await self.bot.fetch_user(user_id=self.ownerID)
             await self.owner.send("[In Starcraft SCV voice]: Reporting for duty!")
 
-        async def alert_owner(context, exception: Exception):
+        async def alert_owner(context: Optional[discord.ext.commands.Context], exception: Exception):
             logging.debug(f"classes.bot.py: alert_owner triggered for {type(exception)}")
+            if context:
+                content = context.message.content
+            else:
+                content = "An internal task, loop or event"
             await self.owner.send(f"Hi, I ran into an issue. Encountered {type(exception)} during\n"
-                                  f"{context.message.content}\non {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}\n"
+                                  f"{content}\non {datetime.now().strftime('%Y/%m/%d %H:%M:%S')}\n"
                                   f"Please investigate.")
 
     def _commands(self):
@@ -207,7 +220,7 @@ class Bot:
             author = context.message.author
             query = {
                 "recipient": author.id,
-                "time": {"$gt": datetime.utcnow()}
+                "completed": False
             }
             reminders_raw = await self.database_connection.find_many(database="CinnamonSwirl", collection="Reminders",
                                                                      query=query, length=5, sort_by="time",
@@ -231,5 +244,49 @@ class Bot:
 
             await context.send(response)
 
+    @tasks.loop(minutes=5)
+    async def refresh_buffer(self):
+        logging.debug("classes.bot.py: Refreshing internal buffer for reminders.")
+        if not self.buffer:
+            logging.debug("classes.bot.py: Buffer was not initialized, refreshing for first time.")
+            await self.buffer.refresh()
+        else:
+            if self.buffer.ready:
+                await self.buffer.refresh()
+            else:
+                logging.debug("classes.bot.py: Buffer wasn't ready when asked to be refreshed, "
+                              "database timeout issue?.")
+                await self._events().alert_owner(exception=InternalBufferNotReady)
+        print(self.buffer)
+
     def run(self):
         self.bot.run(self.token)
+
+
+class RemindersBuffer(list):
+    def __init__(self, database_connection: MongoDB):
+        super().__init__()
+        self.database_connection = database_connection
+        self.ready = False
+
+    def __bool__(self):
+        return self.ready
+
+    async def refresh(self):
+        twenty_minutes_from_now = datetime.utcnow() + timedelta(minutes=20.0)
+        query = {
+            "time": {"$lt": twenty_minutes_from_now},
+            "completed": False
+        }
+
+        results = await self.database_connection.find_many(database="CinnamonSwirl", collection="Reminders",
+                                                           query=query, length=50, sort_by="time", sort_direction=1)
+
+        self.ready = False
+        self.clear()
+        for item in results:
+            reminder = Reminder(time=item['time'], message=item['message'], recipient=item['recipient'])
+            self.append(reminder)
+        self.ready = True
+
+

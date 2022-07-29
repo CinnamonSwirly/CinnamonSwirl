@@ -11,6 +11,7 @@ class Reminder:
         self.time = time
         self.message = message
         self.recipient = recipient
+        self.completed = False
 
     def __bool__(self) -> bool:
         return bool(self.id)
@@ -19,7 +20,8 @@ class Reminder:
         query = {
             "time": self.time,
             "message": self.message,
-            "recipient": self.recipient
+            "recipient": self.recipient,
+            "completed": False
         }
         result = await database_connection.insert_one(database="CinnamonSwirl", collection="Reminders", query=query)
         if result is not None:
