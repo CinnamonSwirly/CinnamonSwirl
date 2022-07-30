@@ -135,6 +135,7 @@ class Bot:
             logging.info("Bot.py: Bot successfully connected to Discord.")
 
             self.refresh_buffer.start()
+            self.check_buffer.start()
 
             self.owner = await self.bot.fetch_user(user_id=self.ownerID)
             await self.owner.send("[In Starcraft SCV voice]: Reporting for duty!")
@@ -198,10 +199,12 @@ class Bot:
             if context and amount and units and args:
                 timedelta_keyword = {units: amount}
                 reminder_time = datetime.utcnow() + timedelta(**timedelta_keyword)
-                reminder = Reminder(time=reminder_time, message=args, recipient=context.message.author.id)
+                reminder = Reminder(time=reminder_time, message=args,
+                                    recipient=context.message.author.id)
                 reminder_id = await reminder.write(database_connection=self.database_connection)
 
                 if reminder_id:
+                    self.buffer.append(reminder)
                     logging.info("classes.bot.py: remind accepted and committed a new reminder to the DB")
                     reminder_time_friendly = reminder_time.strftime('%d %b %Y, %H:%M')
                     response = f"Successfully created a reminder on {reminder_time_friendly}! I'll DM you then!"
@@ -245,19 +248,56 @@ class Bot:
             await context.send(response)
 
     @tasks.loop(minutes=5)
-    async def refresh_buffer(self):
+    async def refresh_buffer(self) -> None:
         logging.debug("classes.bot.py: Refreshing internal buffer for reminders.")
         if not self.buffer:
             logging.debug("classes.bot.py: Buffer was not initialized, refreshing for first time.")
             await self.buffer.refresh()
         else:
-            if self.buffer.ready:
-                await self.buffer.refresh()
-            else:
+            if not self.buffer.ready:
                 logging.debug("classes.bot.py: Buffer wasn't ready when asked to be refreshed, "
                               "database timeout issue?.")
                 await self._events().alert_owner(exception=InternalBufferNotReady)
-        print(self.buffer)
+            else:
+                await self.buffer.refresh()
+        return
+
+    @tasks.loop(minutes=1)
+    async def check_buffer(self) -> None:
+        logging.debug("classes.bot.py: Checking internal buffer for reminders to send")
+        if not self.buffer:
+            logging.debug("classes.bot.py: Buffer has not been initialized yet. Skipping.")
+            pass
+        if not self.buffer.ready:
+            counter = 0
+            while not self.buffer.ready:
+                await sleep(5)
+                counter += 5
+                if counter > 45:
+                    logging.debug("classes.bot.py: Buffer took longer than 45 seconds to ready, "
+                                  "database timeout issue?.")
+                    await self._events().alert_owner(exception=InternalBufferNotReady)
+                    return
+        else:
+            await self.send_reminders()
+
+    async def send_reminders(self):
+        logging.debug("classes.bot.py: Preparing to send reminders")
+        if not self.buffer:
+            logging.debug("classes.bot.py: The internal buffer was not initialized when send_reminders was called")
+            return  # You should not be here!
+        if not self.buffer.ready:
+            logging.debug("classes.bot.py: The internal buffer was not reader when send_reminders was called")
+            return  # You should not be here!
+        one_minute_from_now = datetime.utcnow() + timedelta(seconds=60)
+        upcoming_reminders = filter(lambda a: a.time < one_minute_from_now, self.buffer)
+        for reminder in upcoming_reminders:
+            if not reminder.completed:
+                recipient = await self.bot.fetch_user(user_id=reminder.recipient)
+                await recipient.send(f"Reminder: {reminder.message}")
+                self.buffer.remove(reminder)
+                await reminder.complete(database_connection=self.database_connection)
+        return
 
     def run(self):
         self.bot.run(self.token)
@@ -273,6 +313,7 @@ class RemindersBuffer(list):
         return self.ready
 
     async def refresh(self):
+        logging.debug("classes.bot.py: Refreshing internal buffer...")
         twenty_minutes_from_now = datetime.utcnow() + timedelta(minutes=20.0)
         query = {
             "time": {"$lt": twenty_minutes_from_now},
@@ -285,7 +326,9 @@ class RemindersBuffer(list):
         self.ready = False
         self.clear()
         for item in results:
-            reminder = Reminder(time=item['time'], message=item['message'], recipient=item['recipient'])
+            logging.debug(item)
+            reminder = Reminder(time=item['time'], message=item['message'],
+                                recipient=item['recipient'], _id=item['_id'])
             self.append(reminder)
         self.ready = True
 

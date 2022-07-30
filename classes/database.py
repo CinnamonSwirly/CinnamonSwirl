@@ -1,3 +1,4 @@
+import bson.objectid
 import pymongo
 import motor.motor_asyncio
 import warnings
@@ -89,15 +90,19 @@ class MongoDB:
                               f"{sort_by} by {sort_direction}")
                 assert sort_by in ('_id', 'recipient', 'message', 'time')
                 cursor.sort(key_or_list=sort_by, direction=sort_direction)
+
+            result = []
             # Pycharm thinks collection and cursor could be a str. We catch that above and change it.
             # noinspection PyUnresolvedReferences
-            result = await cursor.to_list(length=length)
+            output = await cursor.to_list(length=length)
+            for item in output:
+                result.append(item)
             logging.debug(f"classes.database.MongoDB: Found {len(result)} result(s).")
             return result
 
     async def insert_one(self, database: Union[str, motor.motor_asyncio.AsyncIOMotorDatabase],
                          collection: Union[str, pymongo.collection.Collection],
-                         query: dict) -> Union[int, None]:
+                         query: dict) -> Union[bson.objectid.ObjectId, None]:
         logging.info(f"classes.database.MongoDB: insert_one called for db: {database}, "
                      f"collection: {collection}, query: {query}")
         async with await self.client.start_session():
@@ -111,3 +116,18 @@ class MongoDB:
                 return result.inserted_id
             else:
                 return None
+
+    async def update_one(self, database: Union[str, motor.motor_asyncio.AsyncIOMotorDatabase],
+                         collection: Union[str, pymongo.collection.Collection],
+                         criteria: dict, update: dict) -> None:
+        logging.info(f"classes.database.MongoDB: update_one called for db: {database}, "
+                     f"collection: {collection}, query: set {criteria} {update}")
+        async with await self.client.start_session():
+            if type(database) is str:
+                database = self.client.get_database(database)
+            if type(collection) is str:
+                collection = database.get_collection(collection)
+            assert database.validate_collection(collection)
+            result = collection.update_one(criteria, update)
+            if not result:
+                logging.warning("classes.database.py: update_one did not return a result. It may not have completed.")

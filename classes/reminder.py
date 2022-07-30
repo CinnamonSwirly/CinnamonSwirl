@@ -1,22 +1,24 @@
 from pymongo.errors import WriteError
 from classes import MongoDB
 from datetime import datetime
+from bson import objectid
+from typing import Optional
 
 __all__ = "Reminder",
 
 
 class Reminder:
-    def __init__(self, time: datetime, message: str, recipient: int):
-        self.id = None
+    def __init__(self, time: datetime, message: str, recipient: int, _id: Optional[objectid.ObjectId] = None):
+        self._id = _id
         self.time = time
         self.message = message
         self.recipient = recipient
         self.completed = False
 
     def __bool__(self) -> bool:
-        return bool(self.id)
+        return bool(self._id)
 
-    async def write(self, database_connection: MongoDB) -> int:
+    async def write(self, database_connection: MongoDB) -> objectid.ObjectId:
         query = {
             "time": self.time,
             "message": self.message,
@@ -25,8 +27,8 @@ class Reminder:
         }
         result = await database_connection.insert_one(database="CinnamonSwirl", collection="Reminders", query=query)
         if result is not None:
-            self.id = result
-            return self.id
+            self._id = result
+            return self._id
         else:
             raise WriteError
 
@@ -58,4 +60,15 @@ class Reminder:
                 if unit != "minute":
                     response += ", "
         return response
+
+    async def complete(self, database_connection: MongoDB) -> None:
+        self.completed = True
+        criteria = {
+            '_id': self._id
+        }
+        update = {
+            '$set': {'completed': True}
+        }
+        await database_connection.update_one(database="CinnamonSwirl", collection="Reminders",
+                                             criteria=criteria, update=update)
 
