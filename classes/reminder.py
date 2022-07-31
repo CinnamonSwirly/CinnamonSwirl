@@ -59,6 +59,8 @@ class Reminder:
                 response += f"{amount} {_check_plural(amount, unit)}"
                 if unit != "minute":
                     response += ", "
+        if len(response) < 1:
+            response = "less than a minute"
         return response
 
     async def complete(self, database_connection: MongoDB) -> None:

@@ -1,9 +1,11 @@
+import asyncio
+
 import discord
 import logging
 import pymongo.errors
 import re
 from datetime import datetime, timedelta
-from asyncio import proactor_events, sleep
+from asyncio import proactor_events, sleep, wait_for
 from urllib import parse
 from discord.ext import commands, tasks
 from functools import wraps
@@ -250,45 +252,31 @@ class Bot:
     @tasks.loop(minutes=5)
     async def refresh_buffer(self) -> None:
         logging.debug("classes.bot.py: Refreshing internal buffer for reminders.")
-        if not self.buffer:
-            logging.debug("classes.bot.py: Buffer was not initialized, refreshing for first time.")
-            await self.buffer.refresh()
-        else:
-            if not self.buffer.ready:
-                logging.debug("classes.bot.py: Buffer wasn't ready when asked to be refreshed, "
-                              "database timeout issue?.")
-                await self._events().alert_owner(exception=InternalBufferNotReady)
-            else:
-                await self.buffer.refresh()
+        try:
+            await wait_for(self.buffer.refresh(), timeout=90.0)
+        except asyncio.TimeoutError:
+            logging.error("classes.bot.py: Buffer refresh timed out.")
+            await self._events().alert_owner(exception=InternalBufferNotReady)
         return
 
     @tasks.loop(minutes=1)
     async def check_buffer(self) -> None:
         logging.debug("classes.bot.py: Checking internal buffer for reminders to send")
         if not self.buffer:
-            logging.debug("classes.bot.py: Buffer has not been initialized yet. Skipping.")
-            pass
-        if not self.buffer.ready:
-            counter = 0
-            while not self.buffer.ready:
-                await sleep(5)
-                counter += 5
-                if counter > 45:
-                    logging.debug("classes.bot.py: Buffer took longer than 45 seconds to ready, "
-                                  "database timeout issue?.")
-                    await self._events().alert_owner(exception=InternalBufferNotReady)
-                    return
-        else:
+            logging.debug("classes.bot.py: Buffer is empty. Skipping.")
+            return
+        try:
             await self.send_reminders()
+        except asyncio.TimeoutError:
+            logging.error("classes.bot.py: Waiting for the buffer to be ready for send_reminders timed out.")
+            await self._events().alert_owner(exception=InternalBufferNotReady)
 
-    async def send_reminders(self):
+    async def send_reminders(self) -> None:
         logging.debug("classes.bot.py: Preparing to send reminders")
-        if not self.buffer:
-            logging.debug("classes.bot.py: The internal buffer was not initialized when send_reminders was called")
-            return  # You should not be here!
         if not self.buffer.ready:
-            logging.debug("classes.bot.py: The internal buffer was not reader when send_reminders was called")
-            return  # You should not be here!
+            await wait_for(self.buffer.wait(5), timeout=45.0)
+
+        self.buffer.ready = False
         one_minute_from_now = datetime.utcnow() + timedelta(seconds=60)
         upcoming_reminders = filter(lambda a: a.time < one_minute_from_now, self.buffer)
         for reminder in upcoming_reminders:
@@ -297,6 +285,7 @@ class Bot:
                 await recipient.send(f"Reminder: {reminder.message}")
                 self.buffer.remove(reminder)
                 await reminder.complete(database_connection=self.database_connection)
+        self.buffer.ready = True
         return
 
     def run(self):
@@ -307,13 +296,17 @@ class RemindersBuffer(list):
     def __init__(self, database_connection: MongoDB):
         super().__init__()
         self.database_connection = database_connection
+        self.ready = True
+
+    async def refresh(self) -> None:
+        logging.debug("classes.bot.py: Refreshing internal buffer...")
+
+        if not self.ready:
+            logging.debug("classes.bot.py: Internal buffer was not ready when asked to be refreshed, waiting...")
+            await wait_for(self.wait(5), timeout=60.0)
+
         self.ready = False
 
-    def __bool__(self):
-        return self.ready
-
-    async def refresh(self):
-        logging.debug("classes.bot.py: Refreshing internal buffer...")
         twenty_minutes_from_now = datetime.utcnow() + timedelta(minutes=20.0)
         query = {
             "time": {"$lt": twenty_minutes_from_now},
@@ -322,8 +315,6 @@ class RemindersBuffer(list):
 
         results = await self.database_connection.find_many(database="CinnamonSwirl", collection="Reminders",
                                                            query=query, length=50, sort_by="time", sort_direction=1)
-
-        self.ready = False
         self.clear()
         for item in results:
             logging.debug(item)
@@ -331,5 +322,9 @@ class RemindersBuffer(list):
                                 recipient=item['recipient'], _id=item['_id'])
             self.append(reminder)
         self.ready = True
+
+    async def wait(self, interval):
+        while not self.ready:
+            await sleep(interval)
 
 
