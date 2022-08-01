@@ -41,6 +41,11 @@ class InternalBufferNotReady(discord.ext.commands.CommandError):
         super().__init__()
 
 
+class InvalidArguments(discord.ext.commands.CommandError):
+    def __init__(self):
+        super().__init__()
+
+
 class Bot:
     def __init__(self, configuration: Configuration, database_connection: MongoDB,
                  intents: discord.Intents):
@@ -107,7 +112,8 @@ class Bot:
                 discord.ext.commands.errors.CommandInvokeError: "Something went wrong. Sorry.",
                 pymongo.errors.WriteError: "There was a problem writing that to my internal database.",
                 AttemptedInjectionException: "You stop that. You know what you did.",
-                UnsupportedCharactersException: "Sorry, I can't support $, () or ;. Try again without those."
+                UnsupportedCharactersException: "Sorry, I can't support $, () or ;. Try again without those.",
+                InvalidArguments: "Sorry, you gave me something I couldn't understand. Can you try looking at @@help?"
             }
 
             serious_errors = [
@@ -171,21 +177,19 @@ class Bot:
                     amount = int(amount)
                 except ValueError:
                     logging.debug("classes.bot.py: remind rejected the amount parameter. It was not an int")
-                    raise discord.ext.commands.errors.CommandInvokeError
+                    raise InvalidArguments
 
             if type(units) is not str:
                 try:
                     units = str(units)
                 except ValueError:
                     logging.debug("classes.bot.py: remind rejected the units parameter. It was not a str")
-                    raise discord.ext.commands.errors.CommandInvokeError
+                    raise InvalidArguments
 
             if type(args) is tuple:
                 args = "{}".format(" ").join(args)
 
-            if 0 < amount < 1000000:
-                pass  # OK
-            else:
+            if not 0 < amount < 1000000:
                 logging.debug("classes.bot.py: remind rejected the amount parameter. It was too high or too low")
                 await context.send(f"You can't specify more than 999,999 {units}.")
                 return
@@ -199,32 +203,29 @@ class Bot:
                 return
 
             if context and amount and units and args:
-                timedelta_keyword = {units: amount}
-                reminder_time = datetime.utcnow() + timedelta(**timedelta_keyword)
+                reminder_time = datetime.utcnow() + timedelta(**{units: amount})
                 reminder = Reminder(time=reminder_time, message=args,
                                     recipient=context.message.author.id)
-                reminder_id = await reminder.write(database_connection=self.database_connection)
+                await reminder.write(database_connection=self.database_connection)
 
-                if reminder_id:
+                if reminder:
                     self.buffer.append(reminder)
                     logging.info("classes.bot.py: remind accepted and committed a new reminder to the DB")
-                    reminder_time_friendly = reminder_time.strftime('%d %b %Y, %H:%M')
-                    response = f"Successfully created a reminder on {reminder_time_friendly}! I'll DM you then!"
+                    response = f"Successfully created a reminder! I'll DM you in {reminder.time_remaining()}!"
                 else:
                     logging.error("classes.bot.py: remind accepted but was unable to commit a new reminder to the DB")
                     response = f"Your reminder was not saved. I'll report this to my owner."
             else:
                 logging.warning("classes.bot.py: remind rejected the reminder for an unhandled reason.")
-                response = "I didn't fully understand that, check $help remind"
+                response = "I didn't fully understand that, check @@help remind"
 
             await context.send(response)
 
         @self.bot.command(name="list", aliases=("get", "find"), help="List your upcoming reminders.")
         async def _list(context):
             logging.info(f"classes.bot.py: list called with {context.message.content}")
-            author = context.message.author
             query = {
-                "recipient": author.id,
+                "recipient": context.message.author.id,
                 "completed": False
             }
             reminders_raw = await self.database_connection.find_many(database="CinnamonSwirl", collection="Reminders",
@@ -238,12 +239,9 @@ class Bot:
                                               recipient=item['recipient']))
 
                 response = "These are your 5 next upcoming reminders:\n"
-                counter = 0
-                for reminder in reminders:
-                    counter += 1
-                    response += f"{counter}. In {reminder.time_remaining()}:" \
+                for iteration, reminder in enumerate(reminders):
+                    response += f"{iteration + 1}. In {reminder.time_remaining()}:" \
                                 f"\n    `{reminder.message}`\n"
-                response += ""
             else:
                 response = "You either don't have any upcoming reminders or I failed to find them."
 
@@ -273,18 +271,22 @@ class Bot:
 
     async def send_reminders(self) -> None:
         logging.debug("classes.bot.py: Preparing to send reminders")
+        one_minute_from_now = datetime.utcnow() + timedelta(seconds=60)
+        def filter_reminders(x: Reminder):
+            if x.time < one_minute_from_now and not x.completed:
+                return True
+            return False
+
         if not self.buffer.ready:
             await wait_for(self.buffer.wait(5), timeout=45.0)
 
         self.buffer.ready = False
-        one_minute_from_now = datetime.utcnow() + timedelta(seconds=60)
-        upcoming_reminders = filter(lambda a: a.time < one_minute_from_now, self.buffer)
+        upcoming_reminders = filter(filter_reminders, self.buffer)
         for reminder in upcoming_reminders:
-            if not reminder.completed:
-                recipient = await self.bot.fetch_user(user_id=reminder.recipient)
-                await recipient.send(f"Reminder: {reminder.message}")
-                self.buffer.remove(reminder)
-                await reminder.complete(database_connection=self.database_connection)
+            recipient = await self.bot.fetch_user(user_id=reminder.recipient)
+            await recipient.send(f"Reminder: {reminder.message}")
+            self.buffer.remove(reminder)
+            await reminder.complete(database_connection=self.database_connection)
         self.buffer.ready = True
         return
 

@@ -1,12 +1,12 @@
-Phase 0 - WE ARE HERE
+Phase 0
     Planning initial features
     Making design decisions
     Implementing practices learned in courses
-Phase 1
+Phase 1 - WE ARE HERE
     Basic functionality
+    Database implementation
     Documentation Tools and/or generation methods
 Phase 2
-    Database implementation
     Methods to stand up environment on demand (Dockerfile, docker compose, etc)
 Phase 3
     Adding advanced features
