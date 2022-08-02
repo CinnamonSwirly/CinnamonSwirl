@@ -1,44 +1,30 @@
-import configparser
-import warnings
+from warnings import warn as console_warning
+from configparser import ConfigParser
 from os import path
 
 __all__ = "Configuration",
 
 
-class Configuration:
+class Configuration(ConfigParser):
     def __init__(self, filename: str):
         """
         Creates a configparser object from the filename provided. If no file actually exists by the name given,
         one will be created
         :param filename: The name of the file containing configuration data.
         """
+        super().__init__()
         self.filename = filename
-        self.configuration = configparser.ConfigParser()
 
         try:
             assert path.exists(f"{filename}")
         except AssertionError:
-            warnings.warn(f"No {filename} file found. Generating a default one instead.", Warning)
+            console_warning(f"No {filename} file found. Generating a default one instead.", Warning)
             self.fallback()
 
         try:
-            self.configuration.read(filename)
+            self.read(filename)
         except MemoryError:
             raise MemoryError("Insufficient memory to import configuration file. The program cannot continue.")
-
-    def __getitem__(self, item):
-        """
-        Returns the imported or generated configuration settings when asked via classInstance['Category']['Item']
-        :param item: Automatically passed when you ask for items from this instance's dictionary.
-        :return: Configuration item requested
-        """
-        # FIXME: This only works when calling "If thing in configuration["item"]" but I also want it to work
-        #   when calling "If thing in configuration". The workaround is "If thing in configuration.configuration"
-
-        return self.configuration[item]
-
-    def __get__(self, instance, owner):
-        return self.configuration
 
     def fallback(self, category: str = None, item: str = None):
         """
@@ -72,18 +58,18 @@ class Configuration:
         if category is None and item is None:
             for key in default_config.keys():
                 for subkey in default_config[key].keys():
-                    self.configuration[key] = {}
-                    self.configuration[key][subkey] = default_config[key][subkey]
+                    self[key] = {}
+                    self[key][subkey] = default_config[key][subkey]
                     with open(file=self.filename, mode="w") as file:
-                        self.configuration.write(file)
+                        self.write(file)
 
         if category is not None and item is None:
             assert category in default_config.keys()
-            self.configuration[category] = {}
+            self[category] = {}
             for subkey in default_config[category].keys():
-                self.configuration[category][subkey] = default_config[category][subkey]
+                self[category][subkey] = default_config[category][subkey]
 
         if category is not None and item is not None:
             assert category in default_config.keys()
             assert item in default_config[category].keys()
-            self.configuration[category][item] = default_config[category][item]
+            self[category][item] = default_config[category][item]

@@ -73,4 +73,3 @@ class Reminder:
         }
         await database_connection.update_one(database="CinnamonSwirl", collection="Reminders",
                                              criteria=criteria, update=update)
-

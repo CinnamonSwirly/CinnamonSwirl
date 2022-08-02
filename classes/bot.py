@@ -1,11 +1,8 @@
-import asyncio
-
-import discord
-import logging
-import pymongo.errors
-import re
+from discord import Intents, utils, Permissions
+from logging import debug, info, warning, error
+from re import search
 from datetime import datetime, timedelta
-from asyncio import proactor_events, sleep, wait_for
+from asyncio import proactor_events, sleep, wait_for, TimeoutError
 from urllib import parse
 from discord.ext import commands, tasks
 from functools import wraps
@@ -17,43 +14,55 @@ from typing import Optional
 __all__ = "Bot",
 
 
-def _sanitize(context: discord.ext.commands.Context) -> bool:
+def _sanitize(context: commands.Context) -> bool:
+    """
+    Meant to clean input to prevent injection of malicious code. Only covers the most common scenarios
+    :param context: A context passed from a command event via discord.py
+    :return: True if context.message.content is clean.
+    :exception: AttemptedInjectionException
+    :exception: UnsupportedCharactersException
+    """
     content = context.message.content
-    if re.search('[F,f]unction\\(\\)', content):
+    if search('[F,f]unction\\(\\)', content):
         raise AttemptedInjectionException
-    if re.search('[$;]|\\(\\)', content):
+    if search('[$;]|\\(\\)', content):
         raise UnsupportedCharactersException
     return True
 
 
-class AttemptedInjectionException(discord.ext.commands.CommandError):
+# The following classes MUST be a child of commands.CommandError so they are handled by on_command_error
+class AttemptedInjectionException(commands.CommandError):
     def __init__(self):
         super().__init__()
 
 
-class UnsupportedCharactersException(discord.ext.commands.CommandError):
+class UnsupportedCharactersException(commands.CommandError):
     def __init__(self):
         super().__init__()
 
 
-class InternalBufferNotReady(discord.ext.commands.CommandError):
+class InternalBufferNotReady(commands.CommandError):
     def __init__(self):
         super().__init__()
 
 
-class InvalidArguments(discord.ext.commands.CommandError):
+class InvalidArguments(commands.CommandError):
+    def __init__(self):
+        super().__init__()
+
+class DatabaseCommunicationError(commands.CommandError):
     def __init__(self):
         super().__init__()
 
 
 class Bot:
     def __init__(self, configuration: Configuration, database_connection: MongoDB,
-                 intents: discord.Intents):
+                 intents: Intents):
         self.configuration = configuration
         self.database_connection = database_connection
         self.buffer = RemindersBuffer(database_connection=database_connection)
 
-        assert "DISCORD" in self.configuration.configuration
+        assert "DISCORD" in self.configuration
         for key in ("clientID", "token", "ownerID"):
             assert key in self.configuration["DISCORD"]
 
@@ -104,52 +113,57 @@ class Bot:
     def _events(self):
         @self.bot.event
         async def on_command_error(context, exception):
-            logging.debug(f"classes.bot.py: on_command_error called for {type(exception)}")
+            # Exceptions must be children of commands.CommandError to be handled here.
+            debug(f"classes.bot.py: on_command_error called for {type(exception)}")
             exception_type = type(exception)
             responses = {
-                discord.ext.commands.errors.NotOwner: "You're not the boss of me!",
-                discord.ext.commands.errors.MissingRequiredArgument: "You're missing something. Try typing $help.",
-                discord.ext.commands.errors.CommandInvokeError: "Something went wrong. Sorry.",
-                pymongo.errors.WriteError: "There was a problem writing that to my internal database.",
+                commands.errors.NotOwner: "You're not the boss of me!",
+                commands.errors.MissingRequiredArgument: "You're missing something. Try typing $help.",
+                commands.errors.CommandInvokeError: "Something went wrong. Sorry.",
                 AttemptedInjectionException: "You stop that. You know what you did.",
                 UnsupportedCharactersException: "Sorry, I can't support $, () or ;. Try again without those.",
-                InvalidArguments: "Sorry, you gave me something I couldn't understand. Can you try looking at @@help?"
+                InvalidArguments: "Sorry, you gave me something I couldn't understand. Can you try looking at @@help?",
+                DatabaseCommunicationError: "Your reminder was not saved. I'll report this to my owner."
             }
 
+            # Add exceptions here to send an alert to the owner. (That could be you!)
             serious_errors = [
-                pymongo.errors.WriteError,
-                AttemptedInjectionException
+                AttemptedInjectionException,
+                commands.errors.CommandInvokeError,
+                DatabaseCommunicationError
             ]
 
             if exception_type in serious_errors:
                 await alert_owner(context, exception)
 
             if exception_type in responses:
-                logging.warning(f"bot.py: Handled exception: {exception_type}, {context.invoked_with}, "
-                                f"by: {context.message.author.id}")
+                warning(f"bot.py: Handled exception: {exception_type}, {context.invoked_with}, "
+                        f"by: {context.message.author.id}")
                 await context.send(responses[exception_type])
             else:
-                logging.error(f"bot.py: Unhandled exception: {exception_type}, {context.invoked_with}, "
-                              f"by: {context.message.author.id}")
+                error(f"bot.py: Unhandled exception: {exception_type}, {context.invoked_with}, "
+                      f"by: {context.message.author.id}")
                 raise
 
         @self.bot.event
         async def on_ready():
             params = {
                 "client_id": self.clientID,
-                "permissions": discord.Permissions(permissions=3072)  # View messages, channels and send messages
+                "permissions": Permissions(permissions=3072)  # View messages, channels and send messages
             }
-            print(f"Bot started and connected to Discord! Invite link: {discord.utils.oauth_url(**params)}")
-            logging.info("Bot.py: Bot successfully connected to Discord.")
+            print(f"Bot started and connected to Discord! Invite link: {utils.oauth_url(**params)}")
+            info("Bot.py: Bot successfully connected to Discord.")
 
+            # Tasks must be explicitly started! Failure to add a task's start() here means the task never runs!
             self.refresh_buffer.start()
             self.check_buffer.start()
 
             self.owner = await self.bot.fetch_user(user_id=self.ownerID)
             await self.owner.send("[In Starcraft SCV voice]: Reporting for duty!")
 
-        async def alert_owner(context: Optional[discord.ext.commands.Context], exception: Exception):
-            logging.debug(f"classes.bot.py: alert_owner triggered for {type(exception)}")
+        async def alert_owner(context: Optional[commands.Context], exception: Exception):
+            # Be sure to have the bot in a server you're in and allow messages from server members.
+            debug(f"classes.bot.py: alert_owner triggered for {type(exception)}")
             if context:
                 content = context.message.content
             else:
@@ -159,7 +173,7 @@ class Bot:
                                   f"Please investigate.")
 
     def _commands(self):
-        @self.bot.command(name="stop")
+        @self.bot.command(name="stop", hidden=True)
         @commands.is_owner()
         async def stop(context):
             await context.send("Signing off, bye bye!")
@@ -171,26 +185,26 @@ class Bot:
                           usage="remind (whole number) (years/months/days/hours/minutes) (message)"
                                 "\nExample: $remindme 1 day Do Project")
         async def _remind(context, amount, units, *args):
-            logging.info(f"classes.bot.py: remind called with {context.message.content}: {amount} {units} {args}")
+            info(f"classes.bot.py: remind called with {context.message.content}: {amount} {units} {args}")
             if type(amount) is not int:
                 try:
                     amount = int(amount)
                 except ValueError:
-                    logging.debug("classes.bot.py: remind rejected the amount parameter. It was not an int")
+                    debug("classes.bot.py: remind rejected the amount parameter. It was not an int")
                     raise InvalidArguments
 
             if type(units) is not str:
                 try:
                     units = str(units)
                 except ValueError:
-                    logging.debug("classes.bot.py: remind rejected the units parameter. It was not a str")
+                    debug("classes.bot.py: remind rejected the units parameter. It was not a str")
                     raise InvalidArguments
 
             if type(args) is tuple:
                 args = "{}".format(" ").join(args)
 
             if not 0 < amount < 1000000:
-                logging.debug("classes.bot.py: remind rejected the amount parameter. It was too high or too low")
+                debug("classes.bot.py: remind rejected the amount parameter. It was too high or too low")
                 await context.send(f"You can't specify more than 999,999 {units}.")
                 return
 
@@ -198,7 +212,7 @@ class Bot:
                 if units[len(units) - 1] != 's':
                     units += 's'
             else:
-                logging.debug("classes.bot.py: remind rejected the units parameter. It was not an expected value.")
+                debug("classes.bot.py: remind rejected the units parameter. It was not an expected value.")
                 await context.send(f"{units} needs to be year(s), month(s), day(s), hour(s) or minute(s).")
                 return
 
@@ -210,27 +224,27 @@ class Bot:
 
                 if reminder:
                     self.buffer.append(reminder)
-                    logging.info("classes.bot.py: remind accepted and committed a new reminder to the DB")
+                    info("classes.bot.py: remind accepted and committed a new reminder to the DB")
                     response = f"Successfully created a reminder! I'll DM you in {reminder.time_remaining()}!"
                 else:
-                    logging.error("classes.bot.py: remind accepted but was unable to commit a new reminder to the DB")
-                    response = f"Your reminder was not saved. I'll report this to my owner."
+                    error("classes.bot.py: remind accepted but was unable to commit a new reminder to the DB")
+                    raise DatabaseCommunicationError
             else:
-                logging.warning("classes.bot.py: remind rejected the reminder for an unhandled reason.")
+                warning("classes.bot.py: remind rejected the reminder for an unhandled reason.")
                 response = "I didn't fully understand that, check @@help remind"
 
             await context.send(response)
 
         @self.bot.command(name="list", aliases=("get", "find"), help="List your upcoming reminders.")
         async def _list(context):
-            logging.info(f"classes.bot.py: list called with {context.message.content}")
+            info(f"classes.bot.py: list called with {context.message.content}")
             query = {
                 "recipient": context.message.author.id,
                 "completed": False
             }
             reminders_raw = await self.database_connection.find_many(database="CinnamonSwirl", collection="Reminders",
                                                                      query=query, length=5, sort_by="time",
-                                                                     sort_direction=pymongo.ASCENDING)
+                                                                     sort_direction=1)
 
             if reminders_raw:
                 reminders = []
@@ -249,29 +263,43 @@ class Bot:
 
     @tasks.loop(minutes=5)
     async def refresh_buffer(self) -> None:
-        logging.debug("classes.bot.py: Refreshing internal buffer for reminders.")
+        """
+        Every 5 minutes we will ask the database for a fresh set of reminders that are coming soon.
+        :return: None
+        """
+        debug("classes.bot.py: Refreshing internal buffer for reminders.")
         try:
             await wait_for(self.buffer.refresh(), timeout=90.0)
-        except asyncio.TimeoutError:
-            logging.error("classes.bot.py: Buffer refresh timed out.")
+        except TimeoutError:
+            error("classes.bot.py: Buffer refresh timed out.")
             await self._events().alert_owner(exception=InternalBufferNotReady)
         return
 
     @tasks.loop(minutes=1)
     async def check_buffer(self) -> None:
-        logging.debug("classes.bot.py: Checking internal buffer for reminders to send")
+        """
+        Every minute we will inspect our internal list of reminders for ones happening this minute.
+        :return: None
+        """
+        debug("classes.bot.py: Checking internal buffer for reminders to send")
         if not self.buffer:
-            logging.debug("classes.bot.py: Buffer is empty. Skipping.")
+            debug("classes.bot.py: Buffer is empty. Skipping.")
             return
         try:
             await self.send_reminders()
-        except asyncio.TimeoutError:
-            logging.error("classes.bot.py: Waiting for the buffer to be ready for send_reminders timed out.")
+        except TimeoutError:
+            error("classes.bot.py: Waiting for the buffer to be ready for send_reminders timed out.")
             await self._events().alert_owner(exception=InternalBufferNotReady)
 
     async def send_reminders(self) -> None:
-        logging.debug("classes.bot.py: Preparing to send reminders")
+        """
+        Look at our internal list of reminders and send them to their recipients if they are due this minute.
+        Mark them as completed and remove them from the list once sent.
+        :return: None
+        """
+        debug("classes.bot.py: Preparing to send reminders")
         one_minute_from_now = datetime.utcnow() + timedelta(seconds=60)
+
         def filter_reminders(x: Reminder):
             if x.time < one_minute_from_now and not x.completed:
                 return True
@@ -291,6 +319,7 @@ class Bot:
         return
 
     def run(self):
+        # The actual "start the bot" function.
         self.bot.run(self.token)
 
 
@@ -301,10 +330,10 @@ class RemindersBuffer(list):
         self.ready = True
 
     async def refresh(self) -> None:
-        logging.debug("classes.bot.py: Refreshing internal buffer...")
+        debug("classes.bot.py: Refreshing internal buffer...")
 
         if not self.ready:
-            logging.debug("classes.bot.py: Internal buffer was not ready when asked to be refreshed, waiting...")
+            debug("classes.bot.py: Internal buffer was not ready when asked to be refreshed, waiting...")
             await wait_for(self.wait(5), timeout=60.0)
 
         self.ready = False
@@ -319,7 +348,7 @@ class RemindersBuffer(list):
                                                            query=query, length=50, sort_by="time", sort_direction=1)
         self.clear()
         for item in results:
-            logging.debug(item)
+            debug(item)
             reminder = Reminder(time=item['time'], message=item['message'],
                                 recipient=item['recipient'], _id=item['_id'])
             self.append(reminder)
@@ -328,5 +357,3 @@ class RemindersBuffer(list):
     async def wait(self, interval):
         while not self.ready:
             await sleep(interval)
-
-

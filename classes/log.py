@@ -1,4 +1,4 @@
-import warnings
+from warnings import warn as console_warning
 from os import path, makedirs, getcwd
 from classes import Configuration
 
@@ -13,27 +13,27 @@ class Log:
         :return filepath for log file. Intended for use with Logging.basicConfig.
         """
         try:
-            assert 'LOGGING' in configuration_file.configuration
+            assert 'LOGGING' in configuration_file
         except AssertionError:
-            warnings.warn(f"No LOGGING section in {configuration_file.filename} file. "
-                          f"Generating a default one instead.",
-                          Warning)
+            console_warning(f"No LOGGING section in {configuration_file.filename} file. "
+                            f"Generating a default one instead.",
+                            Warning)
             configuration_file.fallback(category='LOGGING')
 
         for key in ['loggingLevel']:
             try:
-                assert key in configuration_file.configuration['LOGGING']
+                assert key in configuration_file['LOGGING']
             except AssertionError:
-                warnings.warn(f"No {key} line found in {configuration_file.filename} file. "
-                              f"Going with the default instead.",
-                              Warning)
+                console_warning(f"No {key} line found in {configuration_file.filename} file. "
+                                f"Going with the default instead.",
+                                Warning)
                 configuration_file.fallback(category='LOGGING', item=key)
 
         try:
-            assert configuration_file.configuration['LOGGING']['loggingLevel'] in \
+            assert configuration_file['LOGGING']['loggingLevel'] in \
                    ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
         except AssertionError:
-            warnings.warn("Invalid logging level specified in config file. Reverting to WARNING instead.", Warning)
+            console_warning("Invalid logging level specified in config file. Reverting to WARNING instead.", Warning)
             configuration_file.fallback(category='LOGGING', item='loggingLevel')
 
         current_path = getcwd()
@@ -47,8 +47,8 @@ class Log:
                 makedirs(f"{directories_to_create}")
                 open(f"{logging_file_path}", "x")
             except OSError:
-                warnings.warn(f"Unable to create {logging_file_path}, verify you have permissions and/or disk space.",
-                              Warning)
+                console_warning(f"Unable to create {logging_file_path}, verify you have permissions and/or disk space.",
+                                Warning)
                 raise
 
         self.path = logging_file_path
